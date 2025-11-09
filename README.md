@@ -124,7 +124,7 @@ data: [DONE]
 
 ## Error Handling
 
-All endpoints include error handling:
+All endpoints return standard HTTP status codes with JSON response bodies for error scenarios:
 
 - **400 Bad Request**: Missing required parameters
   ```json
@@ -142,11 +142,7 @@ All endpoints include error handling:
   }
   ```
 
-For streaming endpoints, errors are also sent in SSE format:
-```
-data: {"object":"error","message":"Error description"}
-data: [DONE]
-```
+**Note:** For streaming endpoints, errors that occur during streaming will interrupt the stream. All validation errors are caught before streaming begins and returned as HTTP status code + JSON format.
 
 ## Development
 

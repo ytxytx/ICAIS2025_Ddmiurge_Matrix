@@ -107,46 +107,36 @@ async def literature_review(request: Request):
         print(f"[literature_review] Using model: {os.getenv('SCI_LLM_MODEL')}")
 
         async def generate():
-            try:
-                # Prepare prompt for literature review
-                prompt = f"""Conduct a literature review on the following topic:
+            # Prepare prompt for literature review
+            prompt = f"""Conduct a literature review on the following topic:
 
 {query}"""
 
-                # Call LLM model with streaming
-                stream = await client.chat.completions.create(
-                    model=os.getenv("SCI_LLM_MODEL"),
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2048,
-                    temperature=0.2,
-                    stream=True
-                )
+            # Call LLM model with streaming
+            stream = await client.chat.completions.create(
+                model=os.getenv("SCI_LLM_MODEL"),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2048,
+                temperature=0.2,
+                stream=True
+            )
 
-                # Stream back results
-                async for chunk in stream:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta_content = chunk.choices[0].delta.content
-                        if delta_content:
-                            response_data = {
-                                "object": "chat.completion.chunk",
-                                "choices": [{
-                                    "delta": {
-                                        "content": delta_content
-                                    }
-                                }]
-                            }
-                            yield f"data: {json.dumps(response_data)}\n\n"
+            # Stream back results
+            async for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta_content = chunk.choices[0].delta.content
+                    if delta_content:
+                        response_data = {
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "delta": {
+                                    "content": delta_content
+                                }
+                            }]
+                        }
+                        yield f"data: {json.dumps(response_data)}\n\n"
 
-                yield "data: [DONE]\n\n"
-
-            except Exception as e:
-                print(f"[literature_review] Error: {str(e)}")
-                error_data = {
-                    "object": "error",
-                    "message": str(e)
-                }
-                yield f"data: {json.dumps(error_data)}\n\n"
-                yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -189,60 +179,50 @@ async def paper_qa(request: Request):
         print(f"[paper_qa] Using reasoning model: {os.getenv('SCI_LLM_REASONING_MODEL')}")
 
         async def generate():
-            try:
-                # Extract text from PDF
-                text = extract_pdf_text_from_base64(pdf_content)
+            # Extract text from PDF
+            text = extract_pdf_text_from_base64(pdf_content)
 
-                # Build prompt with PDF content
-                prompt = f"""Answer the question based on the paper content.
+            # Build prompt with PDF content
+            prompt = f"""Answer the question based on the paper content.
 
 Paper:
 {text}
 
 Question: {query}"""
 
-                # Call reasoning model with streaming
-                stream = await client.chat.completions.create(
-                    model=os.getenv("SCI_LLM_REASONING_MODEL"),
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2048,
-                    temperature=0.2,
-                    stream=True
-                )
+            # Call reasoning model with streaming
+            stream = await client.chat.completions.create(
+                model=os.getenv("SCI_LLM_REASONING_MODEL"),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2048,
+                temperature=0.2,
+                stream=True
+            )
 
-                # Stream back results
-                async for chunk in stream:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta = chunk.choices[0].delta
+            # Stream back results
+            async for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
 
-                        # Extract and log reasoning content
-                        reasoning_content = getattr(delta, 'reasoning_content', None)
-                        if reasoning_content:
-                            print(f"[paper_qa] Reasoning: {reasoning_content}", flush=True)
+                    # Extract and log reasoning content
+                    reasoning_content = getattr(delta, 'reasoning_content', None)
+                    if reasoning_content:
+                        print(f"[paper_qa] Reasoning: {reasoning_content}", flush=True)
 
-                        # Stream regular content to client
-                        delta_content = delta.content
-                        if delta_content:
-                            response_data = {
-                                "object": "chat.completion.chunk",
-                                "choices": [{
-                                    "delta": {
-                                        "content": delta_content
-                                    }
-                                }]
-                            }
-                            yield f"data: {json.dumps(response_data)}\n\n"
+                    # Stream regular content to client
+                    delta_content = delta.content
+                    if delta_content:
+                        response_data = {
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "delta": {
+                                    "content": delta_content
+                                }
+                            }]
+                        }
+                        yield f"data: {json.dumps(response_data)}\n\n"
 
-                yield "data: [DONE]\n\n"
-
-            except Exception as e:
-                print(f"[paper_qa] Error: {str(e)}")
-                error_data = {
-                    "object": "error",
-                    "message": str(e)
-                }
-                yield f"data: {json.dumps(error_data)}\n\n"
-                yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -289,68 +269,58 @@ async def ideation(request: Request):
         print(f"[ideation] Using embedding model: {os.getenv('SCI_EMBEDDING_MODEL')}")
 
         async def generate():
-            try:
-                prompt = f"""Generate innovative research ideas for:
+            prompt = f"""Generate innovative research ideas for:
 
 {query}"""
 
-                # Use embedding model to find similarities with hardcoded reference ideas
-                print("[ideation] Computing embeddings for similarity analysis...")
+            # Use embedding model to find similarities with hardcoded reference ideas
+            print("[ideation] Computing embeddings for similarity analysis...")
 
-                # Get embedding for query
-                query_embedding = await get_embedding(query)
+            # Get embedding for query
+            query_embedding = await get_embedding(query)
 
-                # Get embeddings for reference ideas and compute similarities
-                similarities = []
-                for idx, idea in enumerate(reference_ideas):
-                    idea_embedding = await get_embedding(idea)
-                    similarity = cosine_similarity(query_embedding, idea_embedding)
-                    similarities.append((idx, idea, similarity))
+            # Get embeddings for reference ideas and compute similarities
+            similarities = []
+            for idx, idea in enumerate(reference_ideas):
+                idea_embedding = await get_embedding(idea)
+                similarity = cosine_similarity(query_embedding, idea_embedding)
+                similarities.append((idx, idea, similarity))
 
-                # Sort by similarity (highest first)
-                similarities.sort(key=lambda x: x[2], reverse=True)
+            # Sort by similarity (highest first)
+            similarities.sort(key=lambda x: x[2], reverse=True)
 
-                # Add similarity analysis to prompt
-                prompt += f"\n\nReference ideas (ranked by similarity):\n"
-                for idx, idea, sim in similarities:
-                    prompt += f"\n{idx+1}. (similarity: {sim:.3f}) {idea}"
+            # Add similarity analysis to prompt
+            prompt += f"\n\nReference ideas (ranked by similarity):\n"
+            for idx, idea, sim in similarities:
+                prompt += f"\n{idx+1}. (similarity: {sim:.3f}) {idea}"
 
-                prompt += "\n\nGenerate novel research ideas based on the above."
+            prompt += "\n\nGenerate novel research ideas based on the above."
 
-                # Call LLM model with streaming
-                stream = await client.chat.completions.create(
-                    model=os.getenv("SCI_LLM_MODEL"),
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2048,
-                    temperature=0.2,
-                    stream=True
-                )
+            # Call LLM model with streaming
+            stream = await client.chat.completions.create(
+                model=os.getenv("SCI_LLM_MODEL"),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2048,
+                temperature=0.2,
+                stream=True
+            )
 
-                # Stream back results
-                async for chunk in stream:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta_content = chunk.choices[0].delta.content
-                        if delta_content:
-                            response_data = {
-                                "object": "chat.completion.chunk",
-                                "choices": [{
-                                    "delta": {
-                                        "content": delta_content
-                                    }
-                                }]
-                            }
-                            yield f"data: {json.dumps(response_data)}\n\n"
+            # Stream back results
+            async for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta_content = chunk.choices[0].delta.content
+                    if delta_content:
+                        response_data = {
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "delta": {
+                                    "content": delta_content
+                                }
+                            }]
+                        }
+                        yield f"data: {json.dumps(response_data)}\n\n"
 
-                yield "data: [DONE]\n\n"
-
-            except Exception as e:
-                print(f"[ideation] Error: {str(e)}")
-                error_data = {
-                    "object": "error",
-                    "message": str(e)
-                }
-                yield f"data: {json.dumps(error_data)}\n\n"
-                yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -387,52 +357,42 @@ async def paper_review(request: Request):
         print(f"[paper_review] Using model: {os.getenv('SCI_LLM_MODEL')}")
 
         async def generate():
-            try:
-                # Extract text from PDF
-                text = extract_pdf_text_from_base64(pdf_content)
+            # Extract text from PDF
+            text = extract_pdf_text_from_base64(pdf_content)
 
-                # Build prompt with PDF content
-                prompt = f"""Review the following paper:
+            # Build prompt with PDF content
+            prompt = f"""Review the following paper:
 
 Paper:
 {text}
 
 Instruction: {query}"""
 
-                # Call LLM model with streaming
-                stream = await client.chat.completions.create(
-                    model=os.getenv("SCI_LLM_MODEL"),
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2048,
-                    temperature=0.2,
-                    stream=True
-                )
+            # Call LLM model with streaming
+            stream = await client.chat.completions.create(
+                model=os.getenv("SCI_LLM_MODEL"),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2048,
+                temperature=0.2,
+                stream=True
+            )
 
-                # Stream back results
-                async for chunk in stream:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta_content = chunk.choices[0].delta.content
-                        if delta_content:
-                            response_data = {
-                                "object": "chat.completion.chunk",
-                                "choices": [{
-                                    "delta": {
-                                        "content": delta_content
-                                    }
-                                }]
-                            }
-                            yield f"data: {json.dumps(response_data)}\n\n"
+            # Stream back results
+            async for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta_content = chunk.choices[0].delta.content
+                    if delta_content:
+                        response_data = {
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "delta": {
+                                    "content": delta_content
+                                }
+                            }]
+                        }
+                        yield f"data: {json.dumps(response_data)}\n\n"
 
-                yield "data: [DONE]\n\n"
-
-            except Exception as e:
-                print(f"[paper_review] Error: {str(e)}")
-                error_data = {
-                    "object": "error",
-                    "message": str(e)
-                }
-                yield f"data: {json.dumps(error_data)}\n\n"
-                yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
