@@ -26,8 +26,26 @@ All endpoints support streaming responses in Server-Sent Events (SSE) format.
 
 2. Edit `.env` and fill in your API credentials:
    ```
-   SCI_MODEL_BASE_URL=https://your-api-endpoint.com/v1
+   # Base URL for the model API endpoint
+   SCI_MODEL_BASE_URL=https://api.deepseek.com
+
+   # Embedding service API endpoint
+   SCI_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+   # Embedding service API key
+   SCI_EMBEDDING_API_KEY=your-embedding-api-key-here
+
+   # API key for authentication
    SCI_MODEL_API_KEY=your-api-key-here
+
+   # Standard LLM model
+   SCI_LLM_MODEL=deepseek-chat
+
+   # Reasoning LLM model
+   SCI_LLM_REASONING_MODEL=deepseek-reasoner
+
+   # Embedding model
+   SCI_EMBEDDING_MODEL=text-embedding-v4
    ```
 
 3. Build and run with Docker Compose:
@@ -36,13 +54,6 @@ All endpoints support streaming responses in Server-Sent Events (SSE) format.
    ```
 
 4. The service will be available at `http://localhost:3000`
-
-### Custom Port
-
-To use a different host port, set the `HOST_PORT` environment variable:
-```bash
-HOST_PORT=8080 docker-compose up
-```
 
 ## API Endpoints
 
