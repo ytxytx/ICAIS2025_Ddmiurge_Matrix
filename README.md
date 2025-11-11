@@ -15,7 +15,7 @@ All endpoints support streaming responses in Server-Sent Events (SSE) format.
 
 - **deepseek-chat**: Standard LLM for literature review, ideation, and paper review
 - **deepseek-reasoner**: Reasoning model for deep paper analysis
-- **Qwen/Qwen3-Embedding-4B**: Embedding model for semantic similarity in ideation
+- **text-embedding-v4**: Embedding model for semantic similarity in ideation
 
 ## Setup
 
