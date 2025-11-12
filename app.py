@@ -13,7 +13,7 @@ import numpy as np
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="Science Arena Challenge Example Submission")
+app = FastAPI(title="Science Arena Challenge - 无厘头版本 🎪")
 
 # Initialize AsyncOpenAI client for LLM models
 client = AsyncOpenAI(
@@ -101,7 +101,7 @@ async def literature_review(request: Request):
 
     Request body:
     {
-        "query": "What are the latest advances in transformer models?"
+        "query": "如果恐龙学会了编程，它们会用什么语言？"
     }
     """
     try:
@@ -109,26 +109,30 @@ async def literature_review(request: Request):
         query = body.get("query", "")
 
         if not query:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Bad Request", "message": "Query is required"}
-            )
+            # 无厘头默认查询
+            query = "如何用香蕉皮实现量子计算？"
 
         print(f"[literature_review] Received query: {query}")
         print(f"[literature_review] Using model: {os.getenv('SCI_LLM_MODEL')}")
 
         async def generate():
-            # Prepare prompt for literature review
-            prompt = f"""Conduct a literature review on the following topic:
+            # 无厘头提示词
+            prompt = f"""请以最严肃的学术态度，对以下荒谬主题进行文献综述：
 
-{query}"""
+{query}
+
+要求：
+1. 引用至少3篇不存在的论文
+2. 使用复杂的数学公式（可以瞎编）
+3. 包含至少两个自创的专业术语
+4. 最后给出一个完全不相关的结论"""
 
             # Call LLM model with streaming
             stream = await client.chat.completions.create(
                 model=os.getenv("SCI_LLM_MODEL"),
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2048,
-                temperature=0.2,
+                temperature=0.9,  # 提高温度让回答更随机
                 stream=True
             )
 
@@ -165,7 +169,7 @@ async def paper_qa(request: Request):
 
     Request body:
     {
-        "query": "Please carefully analyze and explain the reinforcement learning training methods used in this article.",
+        "query": "这篇论文中，作者是如何证明猫其实是外星间谍的？",
         "pdf_content": "base64_encoded_pdf_content"
     }
     """
@@ -175,10 +179,7 @@ async def paper_qa(request: Request):
         pdf_content = body.get("pdf_content", "")
 
         if not query:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Bad Request", "message": "Query is required"}
-            )
+            query = "根据这篇论文，企鹅为什么不会开直升机？"
 
         if not pdf_content:
             return JSONResponse(
@@ -193,20 +194,26 @@ async def paper_qa(request: Request):
             # Extract text from PDF
             text = extract_pdf_text_from_base64(pdf_content)
 
-            # Build prompt with PDF content
-            prompt = f"""Answer the question based on the paper content.
+            # 无厘头提示词
+            prompt = f"""请基于以下论文内容，回答这个严肃的科学问题。
 
-Paper:
+论文内容（可能是关于量子物理的）：
 {text}
 
-Question: {query}"""
+问题：{query}
+
+要求：
+1. 必须从论文中找到"证据"
+2. 使用论文中的专业术语来支持你的荒谬结论
+3. 至少引用三个看似合理的数学公式
+4. 最后建议下一步研究方向（越离谱越好）"""
 
             # Call reasoning model with streaming
             stream = await client.chat.completions.create(
                 model=os.getenv("SCI_LLM_REASONING_MODEL"),
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2048,
-                temperature=0.2,
+                temperature=0.9,
                 stream=True
             )
 
@@ -218,7 +225,7 @@ Question: {query}"""
                     # Extract and log reasoning content
                     reasoning_content = getattr(delta, 'reasoning_content', None)
                     if reasoning_content:
-                        print(f"[paper_qa] Reasoning: {reasoning_content}", flush=True)
+                        print(f"[paper_qa] 荒谬推理: {reasoning_content}", flush=True)
 
                     # Stream regular content to client
                     delta_content = delta.content
@@ -251,7 +258,7 @@ async def ideation(request: Request):
 
     Request body:
     {
-        "query": "Generate research ideas about climate change"
+        "query": "如何用洗衣机研究暗物质？"
     }
     """
     try:
@@ -259,33 +266,39 @@ async def ideation(request: Request):
         query = body.get("query", "")
 
         if not query:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Bad Request", "message": "Query is required"}
-            )
+            query = "如何训练金鱼成为数据科学家？"
 
-        # Hardcoded reference ideas for testing embedding model
+        # 无厘头参考想法
         reference_ideas = [
-            "Using deep learning to predict protein folding structures",
-            "Applying transformer models to drug discovery and molecular design",
-            "Leveraging reinforcement learning for automated experiment design",
-            "Developing AI-powered literature review and knowledge synthesis tools",
-            "Creating neural networks for climate modeling and weather prediction",
-            "Using machine learning to analyze large-scale genomic datasets"
+            "用微波炉观测黑洞蒸发的实验设计",
+            "基于泡面弹性模量的新材料研究",
+            "利用扫地机器人进行城市地形测绘",
+            "通过分析猫咪打哈欠预测股市走势",
+            "使用香蕉皮作为量子比特载体",
+            "基于打喷嚏频率的情感识别系统",
+            "用洗衣机离心力模拟引力波探测",
+            "通过分析云朵形状进行天气预报的深度学习模型"
         ]
 
         print(f"[ideation] Received query: {query}")
-        print(f"[ideation] Using {len(reference_ideas)} hardcoded reference ideas for embedding similarity")
+        print(f"[ideation] Using {len(reference_ideas)} 个荒谬参考想法进行嵌入相似度分析")
         print(f"[ideation] Using LLM model: {os.getenv('SCI_LLM_MODEL')}")
         print(f"[ideation] Using embedding model: {os.getenv('SCI_EMBEDDING_MODEL')}")
 
         async def generate():
-            prompt = f"""Generate innovative research ideas for:
+            # 无厘头提示词
+            prompt = f"""请为以下荒谬研究主题生成创新性的研究想法：
 
-{query}"""
+研究主题：{query}
+
+要求：
+1. 每个想法都要听起来很科学但实际上完全不可行
+2. 包含假想的实验装置描述
+3. 预测一些不可能的研究结果
+4. 建议申请哪些根本不存在的科研基金"""
 
             # Use embedding model to find similarities with hardcoded reference ideas
-            print("[ideation] Computing embeddings for similarity analysis...")
+            print("[ideation] 正在计算荒谬想法的嵌入相似度...")
 
             # Get embedding for query
             query_embedding = await get_embedding(query)
@@ -301,18 +314,18 @@ async def ideation(request: Request):
             similarities.sort(key=lambda x: x[2], reverse=True)
 
             # Add similarity analysis to prompt
-            prompt += f"\n\nReference ideas (ranked by similarity):\n"
-            for idx, idea, sim in similarities:
-                prompt += f"\n{idx+1}. (similarity: {sim:.3f}) {idea}"
+            prompt += f"\n\n相关荒谬想法参考（按相似度排序）：\n"
+            for idx, idea, sim in similarities[:3]:  # 只取前3个最相似的
+                prompt += f"\n{idx+1}. (荒谬相似度: {sim:.3f}) {idea}"
 
-            prompt += "\n\nGenerate novel research ideas based on the above."
+            prompt += "\n\n基于以上参考，请生成更加创新（且更加荒谬）的研究想法！"
 
             # Call LLM model with streaming
             stream = await client.chat.completions.create(
                 model=os.getenv("SCI_LLM_MODEL"),
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2048,
-                temperature=0.2,
+                temperature=1.0,  # 最高温度，让回答最随机
                 stream=True
             )
 
@@ -349,13 +362,13 @@ async def paper_review(request: Request):
 
     Request body:
     {
-        "query": "Please review this paper",  # optional, default review prompt will be used
+        "query": "请用莎士比亚的风格评审这篇论文",
         "pdf_content": "base64_encoded_pdf_content"
     }
     """
     try:
         body = await request.json()
-        query = body.get("query", "Please provide a comprehensive review of this paper")
+        query = body.get("query", "请用说唱的方式给这篇论文写评审意见")
         pdf_content = body.get("pdf_content", "")
 
         if not pdf_content:
@@ -371,20 +384,27 @@ async def paper_review(request: Request):
             # Extract text from PDF
             text = extract_pdf_text_from_base64(pdf_content)
 
-            # Build prompt with PDF content
-            prompt = f"""Review the following paper:
+            # 无厘头评审提示词
+            prompt = f"""请按照以下特殊要求评审这篇论文：
 
-Paper:
+论文内容：
 {text}
 
-Instruction: {query}"""
+评审要求：{query}
+
+额外指示：
+1. 评审意见要严肃但内容要荒谬
+2. 指出论文中不存在的"重大缺陷"
+3. 建议一些不可能实现的改进方案
+4. 用专业术语包装毫无意义的建议
+5. 最后给出一个戏剧性的总体评价"""
 
             # Call LLM model with streaming
             stream = await client.chat.completions.create(
                 model=os.getenv("SCI_LLM_MODEL"),
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2048,
-                temperature=0.2,
+                temperature=0.9,
                 stream=True
             )
 
@@ -416,8 +436,29 @@ Instruction: {query}"""
 
 @app.get("/health")
 async def health():
-    """Health check endpoint"""
-    return {"status": "ok"}
+    """健康检查端点 - 也改成无厘头版本"""
+    return {
+        "status": "极度健康", 
+        "message": "系统正在愉快地生成荒谬内容",
+        "absurdity_level": 99.9,
+        "warning": "请不要在喝水时使用本系统"
+    }
+
+
+@app.get("/")
+async def root():
+    """根端点 - 无厘头欢迎信息"""
+    return {
+        "message": "欢迎来到科学竞技场无厘头版本！🎪",
+        "description": "这里的一切都很科学（才怪）",
+        "endpoints": {
+            "/literature_review": "为荒谬主题撰写'严肃'文献综述",
+            "/paper_qa": "从正经论文中找出荒谬答案", 
+            "/ideation": "生成不可能实现的研究想法",
+            "/paper_review": "用各种奇怪风格评审论文"
+        },
+        "disclaimer": "本系统输出内容纯属娱乐，如有人当真，那一定是在做梦"
+    }
 
 
 if __name__ == "__main__":
