@@ -16,9 +16,9 @@ from ..models import (
 class AgentBase(ABC):
     """智能体基类 - 提供统一的智能体接口和核心功能"""
     
-    def __init__(self, config: AgentConfig):
-        self.config = config
-        self.logger = logging.getLogger(f"agent.{config.name}")
+    def __init__(self, agent_config: AgentConfig):
+        self.config = agent_config
+        self.logger = logging.getLogger(f"agent.{agent_config.name}")
         
         # 初始化LLM客户端 - 使用全局config对象
         self.client = AsyncOpenAI(
@@ -37,7 +37,7 @@ class AgentBase(ABC):
         
         # 会话状态
         self.session_start_time = datetime.now()
-        self.is_streaming = config.enable_streaming
+        self.is_streaming = agent_config.enable_streaming
 
     @abstractmethod
     async def execute(self, query: str, **kwargs) -> AsyncGenerator[str, None]:

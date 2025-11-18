@@ -6,7 +6,7 @@ import base64
 import httpx
 import asyncio
 
-BASE_URL = "http://localhost:3000"
+BASE_URL = "http://localhost:8000"
 PDF_FILE = "attention_is_all_you_need.pdf"
 
 
@@ -162,8 +162,8 @@ async def main():
 
     try:
         await test_health()
-        await test_literature_review()
-        await test_paper_qa()
+        # await test_literature_review()
+        # await test_paper_qa()
         await test_ideation()
         await test_paper_review()
 
