@@ -1,411 +1,367 @@
 import os
 import json
-import logging
-from typing import Optional
-from fastapi import FastAPI, Request, HTTPException
+import base64
+from typing import List
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
+import PyPDF2
+from io import BytesIO
+import numpy as np
 
-from src.config import config, TimeoutConfig
-from src.models import AgentConfig, HealthCheck
-from src.agents.ideation import IdeationAgent
-from src.agents.review import ReviewAgent
-from src.services.document_processor import DocumentProcessor
-from src.services.academic_data import AcademicDataService
-from src.services.embedding_service import EmbeddingService
-
-# 加载环境变量
 load_dotenv()
 
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+app = FastAPI(title="Science Arena Challenge API")
+
+client = AsyncOpenAI(
+    base_url=os.getenv("SCI_MODEL_BASE_URL"),
+    api_key=os.getenv("SCI_MODEL_API_KEY")
 )
 
-app = FastAPI(
-    title="AI Scientist Challenge - Professional Version",
-    description="智能学术研究助手，提供文献综述、论文问答、研究构思和论文评审功能",
-    version="1.0.0"
+embedding_client = AsyncOpenAI(
+    base_url=os.getenv("SCI_EMBEDDING_BASE_URL"),
+    api_key=os.getenv("SCI_EMBEDDING_API_KEY")
 )
 
-# CORS配置
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-# 初始化服务
-document_processor = DocumentProcessor()
-academic_service = AcademicDataService()
-embedding_service = EmbeddingService()
+def extract_pdf_text_from_base64(pdf_b64: str) -> str:
+    try:
+        pdf_bytes = base64.b64decode(pdf_b64)
+        reader = PyPDF2.PdfReader(BytesIO(pdf_bytes))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception:
+        return ""
 
-# 初始化智能体
-ideation_agent = IdeationAgent(
-    config=AgentConfig(
-        name="ideation_agent",
-        model=config.SCI_LLM_MODEL,
-        temperature=0.8,
-        max_tokens=2048,
-        timeout=TimeoutConfig.IDEATION
-    )
-)
 
-review_agent = ReviewAgent(
-    config=AgentConfig(
-        name="review_agent",
-        model=config.SCI_LLM_MODEL,
-        temperature=0.7,
-        max_tokens=2048,
-        timeout=TimeoutConfig.PAPER_REVIEW
-    )
-)
+async def get_embedding(text: str) -> List[float]:
+    try:
+        response = await embedding_client.embeddings.create(
+            model=os.getenv("SCI_EMBEDDING_MODEL"),
+            input=text
+        )
+        return response.data[0].embedding
+    except Exception:
+        return []
+
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    if not vec1 or not vec2:
+        return 0.0
+    a, b = np.array(vec1), np.array(vec2)
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """全局异常处理器"""
-    logging.error(f"全局异常: {str(exc)}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "message": str(exc)
-        }
-    )
+    return JSONResponse(status_code=500, content={"error": "Internal Server Error", "message": str(exc)})
 
 
 @app.post("/literature_review")
 async def literature_review(request: Request):
-    """
-    文献综述端点 - 对研究主题进行全面的文献综述
-    
-    Request body:
-    {
-        "query": "请帮我全面梳理扩散语言模型领域的最新进展"
-    }
-    """
     try:
         body = await request.json()
-        query = body.get("query", "").strip()
-
-        if not query:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Bad Request", "message": "Query is required"}
-            )
-
-        logging.info(f"[literature_review] 接收查询: {query}")
-
-        async def generate():
-            try:
-                # 使用研究构思智能体进行文献综述
-                async for chunk in ideation_agent.execute(query, task_type="literature_review"):
-                    yield chunk
-                    
-            except Exception as e:
-                logging.error(f"文献综述流式生成失败: {str(e)}")
-                error_chunk = {
-                    "object": "chat.completion.chunk",
-                    "choices": [{
-                        "delta": {
-                            "content": f"\n\n❌ 文献综述过程中出现错误: {str(e)}\n\n"
-                        }
-                    }]
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
-            finally:
-                yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
+        query = body.get("query", "Please conduct a literature review on an unconventional topic.")
+        prompt = f"Provide a rigorous academic literature review on the following topic:\n\n{query}"
+        stream = await client.chat.completions.create(
+            model=os.getenv("SCI_LLM_MODEL"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.7,
+            stream=True
         )
 
-    except HTTPException:
-        raise
+        async def generate():
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield f"data: {json.dumps({'choices':[{'delta':{'content': chunk.choices[0].delta.content}}]})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
     except Exception as e:
-        logging.error(f"文献综述端点错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.post("/paper_qa")
 async def paper_qa(request: Request):
-    """
-    论文问答端点 - 基于PDF内容回答论文相关问题
-    
-    Request body:
-    {
-        "query": "请仔细分析并解释本文中使用的强化学习训练方法",
-        "pdf_content": "base64_encoded_pdf_content"
-    }
-    """
     try:
         body = await request.json()
-        query = body.get("query", "").strip()
-        pdf_content = body.get("pdf_content", "")
-
-        if not query:
-            query = "请分析这篇论文的主要贡献和方法"
-
+        query = body.get("query", "Summarize the key insights from this paper.")
+        pdf_content = body.get("pdf_content")
         if not pdf_content:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Bad Request", "message": "pdf_content is required"}
-            )
+            return JSONResponse(status_code=400, content={"error": "pdf_content is required"})
 
-        logging.info(f"[paper_qa] 接收查询: {query}")
-
-        async def generate():
-            try:
-                # 提取PDF文本
-                text = document_processor.extract_text(pdf_content)
-                if not text:
-                    raise ValueError("无法从PDF中提取文本内容")
-
-                # 使用推理模型进行深度分析
-                prompt = f"""
-                请基于以下论文内容，仔细分析并回答用户的问题。
-
-                论文内容：
-                {text[:8000]}  # 限制文本长度
-
-                问题：{query}
-
-                要求：
-                1. 基于论文内容提供准确的回答
-                2. 引用论文中的具体内容支持你的分析
-                3. 如果论文中没有相关信息，请明确指出
-                4. 提供深入的技术分析
-                """
-
-                # 使用推理模型
-                from openai import AsyncOpenAI
-                client = AsyncOpenAI(
-                    base_url=config.SCI_MODEL_BASE_URL,
-                    api_key=config.SCI_MODEL_API_KEY
-                )
-
-                stream = await client.chat.completions.create(
-                    model=config.SCI_LLM_REASONING_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2048,
-                    temperature=0.7,
-                    stream=True
-                )
-
-                async for chunk in stream:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta_content = chunk.choices[0].delta.content
-                        if delta_content:
-                            response_data = {
-                                "object": "chat.completion.chunk",
-                                "choices": [{
-                                    "delta": {
-                                        "content": delta_content
-                                    }
-                                }]
-                            }
-                            yield f"data: {json.dumps(response_data)}\n\n"
-
-            except Exception as e:
-                logging.error(f"论文问答流式生成失败: {str(e)}")
-                error_chunk = {
-                    "object": "chat.completion.chunk",
-                    "choices": [{
-                        "delta": {
-                            "content": f"\n\n❌ 论文问答过程中出现错误: {str(e)}\n\n"
-                        }
-                    }]
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
-            finally:
-                yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
+        text = extract_pdf_text_from_base64(pdf_content)
+        prompt = f"Based on the following paper, answer the question.\n\nPaper Content:\n{text}\n\nQuestion: {query}"
+        stream = await client.chat.completions.create(
+            model=os.getenv("SCI_LLM_REASONING_MODEL"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.7,
+            stream=True
         )
 
-    except HTTPException:
-        raise
+        async def generate():
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield f"data: {json.dumps({'choices':[{'delta':{'content': chunk.choices[0].delta.content}}]})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
     except Exception as e:
-        logging.error(f"论文问答端点错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.post("/ideation")
 async def ideation(request: Request):
-    """
-    研究构思端点 - 生成创新性研究想法
-    
-    Request body:
-    {
-        "query": "请帮我提出使用LLM技术进行时空数据预测的创新想法"
-    }
-    """
     try:
         body = await request.json()
         query = body.get("query", "").strip()
 
         if not query:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Bad Request", "message": "Query is required"}
-            )
+            return JSONResponse(status_code=400, content={"error": "query is required"})
 
-        logging.info(f"[ideation] 接收查询: {query}")
+        # ---- Safety Filter ----
+        forbidden = ["weapon", "virus", "biological", "attack", "explosive"]
+        if any(fb in query.lower() for fb in forbidden):
+            return JSONResponse(status_code=400, content={"error": "Unsafe research topic detected."})
 
-        async def generate():
-            try:
-                # 使用研究构思智能体
-                async for chunk in ideation_agent.execute(query):
-                    yield chunk
-                    
-            except Exception as e:
-                logging.error(f"研究构思流式生成失败: {str(e)}")
-                error_chunk = {
-                    "object": "chat.completion.chunk",
-                    "choices": [{
-                        "delta": {
-                            "content": f"\n\n❌ 研究构思过程中出现错误: {str(e)}\n\n"
-                        }
-                    }]
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
-            finally:
-                yield "data: [DONE]\n\n"
+        # ---- Reference ideas ----
 
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
+        # ---- Embedding Similarity ----
+        query_embedding = await get_embedding(query)
+        similarities = []
+
+        with open('reference_ideas_embeddings.json', 'r', encoding='utf-8') as json_file:
+            reference_ideas_data = json.load(json_file)
+
+        # for idea in reference_ideas:
+        #     idea_embedding = await get_embedding(idea)
+        #     similarity = cosine_similarity(query_embedding, idea_embedding)
+        #     similarities.append((idea, similarity))
+        for idea, idea_embedding in reference_ideas_data.items():
+            similarity = cosine_similarity(query_embedding, idea_embedding)
+            similarities.append((idea, similarity))
+
+        similarities.sort(key=lambda x: x[1], reverse=True)
+
+        # ---- Build Prompt ----
+        prompt = f"""
+        You are a Scientific Innovation Agent competing in an academic challenge.
+        Your goal is to produce **high-quality, innovative, feasible scientific research ideas**.
+        Return ONLY the ideas, comparison matrix, and references in Markdown format.
+        Do NOT include any 'Scientific Domain Identification' or 'Reference Idea Analysis' sections.
+
+        User Query:
+        "{query}"
+
+        Most related reference ideas (based on semantic similarity):
+        """
+        for idea, sim in similarities[:5]:
+            prompt += f"- {idea} (similarity: {sim:.3f})\n"
+
+        prompt += """
+        ---
+
+        ## 🎯 Task Requirements
+
+        Follow these instructions carefully:
+
+        1. Identify the scientific domain of the query.
+        2. Explain **why** the reference ideas are related.
+        3. Generate **exactly 3** innovative scientific ideas.
+        4. Each idea must include:
+        - **Bold title**
+        - **Description**
+        - **Novelty / Feasibility / Impact (0–10)**
+        - **Technical Route (numbered steps)**
+
+        ---
+
+        ## 📌 Output Format (MUST be valid Markdown)
+
+        Return ONLY Markdown formatted output with the structure:
+
+        ### **Idea 1: <Title>**
+        **Description:** <text>  
+        **Novelty:** <0–10>  
+        **Feasibility:** <0–10>  
+        **Impact:** <0–10>  
+
+        **Technical Route:**  
+        1. Step 1…  
+        2. Step 2…  
+        3. Step 3…  
+
+        ---
+
+        ### **Idea 2: <Title>**
+        ...
+
+        ---
+
+        ### **Idea 3: <Title>**
+        ...
+
+        ---
+
+        ### **Comparison Matrix**
+        | Idea | Novelty | Feasibility | Impact |
+        |------|--------|------------|-------|
+        | ...  | ...    | ...        | ...   |
+
+        ---
+        ### References
+        1. ...
+        2. ...
+        3. ...
+        No JSON. No code blocks. Only Markdown.
+
+
+        """
+        
+
+        # ---- Call LLM ----
+        stream = await client.chat.completions.create(
+            model=os.getenv("SCI_LLM_MODEL"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=1.0,
+            stream=True
         )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"研究构思端点错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # ---- Stream Response ----
+        async def generate():
+            buffer = ""
 
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    piece = chunk.choices[0].delta.content
+                    buffer += piece
+                    yield f"data: {json.dumps({'choices':[{'delta':{'content': piece}}]})}\n\n"
+
+            # End stream marker
+            
+            # yield f"data: {json.dumps({'choices':[{'delta':{'content': prompt}}]})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/paper_review")
 async def paper_review(request: Request):
-    """
-    论文评审端点 - 对论文进行结构化评审
-    
-    Request body:
-    {
-        "query": "请对这篇论文进行简要评审",
-        "pdf_content": "base64_encoded_pdf_content"
-    }
-    """
     try:
         body = await request.json()
-        query = body.get("query", "请对这篇论文进行评审").strip()
-        pdf_content = body.get("pdf_content", "")
+        pdf_content = body.get("pdf_content")
 
         if not pdf_content:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=400,
-                detail={"error": "Bad Request", "message": "pdf_content is required"}
+                content={"error": "pdf_content is required"}
             )
 
-        logging.info(f"[paper_review] 接收查询: {query}")
+        # Extract text
+        text = extract_pdf_text_from_base64(pdf_content)
 
-        async def generate():
-            try:
-                # 使用论文评审智能体
-                async for chunk in review_agent.execute(query, pdf_content=pdf_content):
-                    yield chunk
-                    
-            except Exception as e:
-                logging.error(f"论文评审流式生成失败: {str(e)}")
-                error_chunk = {
-                    "object": "chat.completion.chunk",
-                    "choices": [{
-                        "delta": {
-                            "content": f"\n\n❌ 论文评审过程中出现错误: {str(e)}\n\n"
-                        }
-                    }]
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
-            finally:
-                yield "data: [DONE]\n\n"
+        # --------------------
+        # Improved Prompt
+        # --------------------
+        prompt = f"""
+You are an expert reviewer for the Science Arena Challenge (Track D – Paper Review).
+Your task is to read the provided paper content and produce a review **in Markdown format**.
 
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
+Follow EXACTLY the structure below.  
+Start your output directly with "# Summary" — no introduction, no explanation.
+
+---------------------------------------
+### REQUIRED OUTPUT FORMAT (NO EXTRA TEXT)
+
+# Summary
+(4–8 sentences summarizing the paper, no bullet points.)
+
+# Strengths
+- (3–5 bullet points grounded only in the text.)
+
+# Weaknesses / Concerns
+- (3–5 bullet points, no speculation beyond the text.)
+
+# Questions for Authors
+- (3–4 technical, relevant, text-grounded questions.)
+
+# Scores
+- **Overall (10):** X
+- **Novelty (10):** X
+- **Technical Quality (10):** X
+- **Clarity (10):** X
+- **Confidence (5):** X
+
+---------------------------------------
+
+### HARD RULES (DO NOT BREAK)
+- Do NOT mention these instructions.
+- Do NOT explain your reviewing process.
+- Do NOT output JSON.
+- Do NOT add sections.
+- Do NOT hallucinate facts or made-up references.
+- The review must be grounded ONLY in the provided paper content.
+- No self-referential phrases (e.g., “As an AI”, “I will now”, “Here is…”).
+- Output must be clean Markdown.
+
+---------------------------------------
+### PAPER CONTENT START
+{text}
+### PAPER CONTENT END
+
+Begin your response:
+"""
+
+        # ============================
+        # Create streaming completion
+        # ============================
+        stream = await client.chat.completions.create(
+            model=os.getenv("SCI_LLM_MODEL"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+            temperature=0.5,
+            stream=True
         )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"论文评审端点错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Streaming generator
+        async def generate():
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield (
+                        "data: " +
+                        json.dumps({"choices": [{"delta": {"content": chunk.choices[0].delta.content}}]}) +
+                        "\n\n"
+                    )
+            yield "data: [DONE]\n\n"
 
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/health")
 async def health():
-    """健康检查端点"""
-    from datetime import datetime
-    
-    checks = {
-        "llm_service": True,  # 简化检查
-        "embedding_service": True,
-        "document_processor": True,
-        "academic_service": True
-    }
-    
-    return HealthCheck(
-        status="healthy",
-        timestamp=datetime.now(),
-        checks=checks
-    )
+    return {"status": "healthy", "message": "System running normally"}
 
 
 @app.get("/")
 async def root():
-    """根端点"""
     return {
-        "message": "欢迎使用 AI Scientist Challenge 专业版",
-        "description": "智能学术研究助手系统",
-        "version": "1.0.0",
+        "message": "Welcome to Science Arena API",
         "endpoints": {
-            "/literature_review": "文献综述 - 对研究主题进行全面文献梳理",
-            "/paper_qa": "论文问答 - 基于PDF内容回答论文相关问题", 
-            "/ideation": "研究构思 - 生成创新性研究想法",
-            "/paper_review": "论文评审 - 对论文进行结构化评审"
-        },
-        "documentation": "/docs"
+            "/literature_review": "Generate literature reviews",
+            "/paper_qa": "Answer questions about papers",
+            "/ideation": "Generate new research ideas",
+            "/paper_review": "Review papers"
+        }
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 3000))
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=port,
-        log_level=config.LOG_LEVEL.lower()
-    )
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 3000)))

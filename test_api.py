@@ -89,7 +89,7 @@ async def test_ideation():
         async with client.stream(
             "POST",
             f"{BASE_URL}/ideation",
-            json={"query": "Generate research ideas for improving neural machine translation"}
+            json={"query": "Generate research ideas for improving dexterous robotic manipulation, especially contact-rich tasks."}
         ) as response:
             print("Response:")
             async for line in response.aiter_lines():
