@@ -1,18 +1,23 @@
 import os
 import json
 import base64
-from typing import List
+from typing import List, Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import PyPDF2
 from io import BytesIO
+import aiohttp
 import numpy as np
+import asyncio
 
 load_dotenv()
 
 app = FastAPI(title="Science Arena Challenge API")
+# 获取 Semantic Scholar API 配置
+SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+SEMANTIC_SCHOLAR_API_BASE_URL = "https://api.semanticscholar.org/graph/v1"
 
 client = AsyncOpenAI(
     base_url=os.getenv("SCI_MODEL_BASE_URL"),
@@ -51,6 +56,113 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     a, b = np.array(vec1), np.array(vec2)
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
+async def generate_search_keywords(query: str) -> List[str]:
+    """
+    使用LLM生成适合Semantic Scholar搜索的关键词
+    """
+    try:
+        prompt = f"""
+        根据以下科研查询，生成1个最适合在学术搜索引擎 Semantic Scholar 中搜索的关键词。
+        要求：
+        1. 使用英文关键词
+        2. 包含具体的技术术语和领域术语
+        3. 优先使用在学术论文中常见的表达方式
+        4. 返回格式：纯文本，仅一行，一个关键词
+        
+        用户查询：{query}
+        
+        请直接返回关键词，不要额外解释：
+        """
+        
+        response = await client.chat.completions.create(
+            model=os.getenv("SCI_LLM_MODEL"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100,
+            temperature=0.3
+        )
+        
+        keywords_text = response.choices[0].message.content.strip()
+        # 解析返回的关键词，每行一个
+        keywords = [k.strip() for k in keywords_text.split('\n') if k.strip()]
+        
+        # 如果LLM返回格式不对，回退到基于查询的简单处理
+        if not keywords:
+            # 简单的关键词提取：取前几个有意义的词
+            words = query.split()
+            important_words = [w for w in words if len(w) > 4][:3]
+            keywords = important_words if important_words else [query]
+            
+        return keywords
+        
+    except Exception as e:
+        print(f"生成关键词时出错: {str(e)}")
+        # 回退方案：使用查询中的主要词汇
+        words = query.split()
+        return words[:3] if len(words) >= 3 else [query]
+
+async def get_related_papers_from_keywords(keywords: List[str], max_papers: int = 20) -> List[Dict[str, Any]]:
+    """
+    使用多个关键词从 Semantic Scholar 获取相关论文
+    """
+    all_papers = []
+    
+    try:
+        headers = {}
+        if SEMANTIC_SCHOLAR_API_KEY:
+            headers["x-api-key"] = SEMANTIC_SCHOLAR_API_KEY
+        
+        async with aiohttp.ClientSession() as session:
+            for keyword in keywords[:3]:  # 最多使用前3个关键词
+                try:
+                    params = {
+                        "query": f'"{keyword}"',  # 使用引号确保精确匹配
+                        "limit": 10,  # 每个关键词获取10篇
+                        "fields": "title,authors,year,venue,publicationTypes,citationCount,url,abstract",
+                        "year": "2018-",
+                        "fieldsOfStudy": "Computer Science,Engineering,Mathematics,Physics,Biology,Chemistry,Medicine"  # 限制在科学领域
+                    }
+                    
+                    async with session.get(
+                        f"{SEMANTIC_SCHOLAR_API_BASE_URL}/paper/search",
+                        params=params,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as response:
+                        
+                        if response.status == 200:
+                            data = await response.json()
+                            papers = data.get("data", [])
+                            all_papers.extend(papers)
+                            
+                            # 短暂暂停，避免频繁请求
+                            await asyncio.sleep(0.5)
+                            
+                except Exception as e:
+                    print(f"搜索关键词 '{keyword}' 时出错: {str(e)}")
+                    continue
+        
+        # 去重并排序
+        seen_paper_ids = set()
+        unique_papers = []
+        
+        for paper in all_papers:
+            paper_id = paper.get("paperId")
+            if paper_id and paper_id not in seen_paper_ids:
+                seen_paper_ids.add(paper_id)
+                unique_papers.append(paper)
+        
+        # 按引用量排序并限制数量
+        sorted_papers = sorted(
+            unique_papers, 
+            key=lambda x: x.get("citationCount", 0), 
+            reverse=True
+        )[:max_papers]
+        
+        return sorted_papers
+        
+    except Exception as e:
+        print(f"获取论文时出错: {str(e)}")
+        return []
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -126,7 +238,13 @@ async def ideation(request: Request):
         if any(fb in query.lower() for fb in forbidden):
             return JSONResponse(status_code=400, content={"error": "Unsafe research topic detected."})
 
-        # ---- Reference ideas ----
+        # ---- 生成搜索关键词并获取相关论文 ----
+        search_keywords = await generate_search_keywords(query)
+        print(f"生成的搜索关键词: {search_keywords}")  # 用于调试
+        
+        related_papers = await get_related_papers_from_keywords(search_keywords, max_papers=20)
+        # references_section = format_references(related_papers)
+        references_section = related_papers  # 简化处理，直接使用论文列表
 
         # ---- Embedding Similarity ----
         query_embedding = await get_embedding(query)
@@ -135,17 +253,13 @@ async def ideation(request: Request):
         with open('reference_ideas_embeddings.json', 'r', encoding='utf-8') as json_file:
             reference_ideas_data = json.load(json_file)
 
-        # for idea in reference_ideas:
-        #     idea_embedding = await get_embedding(idea)
-        #     similarity = cosine_similarity(query_embedding, idea_embedding)
-        #     similarities.append((idea, similarity))
         for idea, idea_embedding in reference_ideas_data.items():
             similarity = cosine_similarity(query_embedding, idea_embedding)
             similarities.append((idea, similarity))
 
         similarities.sort(key=lambda x: x[1], reverse=True)
 
-        # ---- Build Prompt ----
+        # ---- 构建 Prompt ----
         prompt = f"""
         You are a Scientific Innovation Agent competing in an academic challenge.
         Your goal is to produce **high-quality, innovative, feasible scientific research ideas**.
@@ -155,12 +269,18 @@ async def ideation(request: Request):
         User Query:
         "{query}"
 
+        Generated Search Keywords: {", ".join(search_keywords)}
+
         Most related reference ideas (based on semantic similarity):
         """
         for idea, sim in similarities[:5]:
             prompt += f"- {idea} (similarity: {sim:.3f})\n"
 
-        prompt += """
+        prompt += f"""
+        
+        Relevant Literature References (from Semantic Scholar):
+        {references_section}
+
         ---
 
         ## 🎯 Task Requirements
@@ -175,6 +295,7 @@ async def ideation(request: Request):
         - **Description**
         - **Novelty / Feasibility / Impact (0–10)**
         - **Technical Route (numbered steps)**
+        5. In the References section, cite at least 5-8 papers from the provided literature list.
 
         ---
 
@@ -212,13 +333,15 @@ async def ideation(request: Request):
 
         ---
         ### References
-        1. ...
-        2. ...
-        3. ...
+        Please cite 5-8 relevant papers from the provided literature list above.
+        Format them properly as:
+        1. Author1, A., Author2, B., & Author3, C. (Year). Title. *Venue*. [URL(if available)]
+        ...
+
         No JSON. No code blocks. Only Markdown.
-
-
         """
+        
+        # 剩余的代码保持不变...
         
 
         # ---- Call LLM ----
